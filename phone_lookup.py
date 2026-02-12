@@ -294,6 +294,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Abstract API key for extra phone metadata (free tier available)",
     )
+    parser.add_argument(
+        "--web-search",
+        action="store_true",
+        help="Also generate OSINT web search queries (social media, directories, etc.)",
+    )
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open top web search queries in your browser (requires --web-search)",
+    )
     return parser
 
 
@@ -315,6 +325,15 @@ def do_lookup(phone_str: str, args) -> dict:
 
         if args.abstract_key:
             data.update(lookup_abstractapi(e164, args.abstract_key))
+
+        if getattr(args, "web_search", False):
+            try:
+                from phone_web_search import run_web_search
+                open_browser = getattr(args, "open_browser", False)
+                run_web_search(phone_str, open_browser=open_browser,
+                               output_format="text")
+            except ImportError:
+                print("\n  [!] phone_web_search.py not found — skipping web queries.")
 
     return data
 

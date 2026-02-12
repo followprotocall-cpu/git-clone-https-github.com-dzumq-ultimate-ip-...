@@ -12,6 +12,7 @@ A Python CLI tool that retrieves **publicly available** information tied to any 
 | **Geographic Location** | Country, region, city-level location associated with the number |
 | **Timezone(s)** | Timezone(s) the number's region falls under |
 | **Country Info** | Country name, country calling code, region code |
+| **Web Search Queries** | Auto-generated OSINT search queries across social media, directories, public records, classifieds, and more |
 
 ### Optional API Enrichment
 
@@ -55,6 +56,28 @@ python phone_lookup.py +14155552671 --numverify-key YOUR_KEY
 python phone_lookup.py +14155552671 --abstract-key YOUR_KEY
 python phone_lookup.py +14155552671 --numverify-key KEY1 --abstract-key KEY2
 ```
+
+### Web search for public footprint
+
+```bash
+# Add web search queries to any lookup
+python phone_lookup.py +14155552671 --web-search
+
+# Open top results in your browser automatically
+python phone_lookup.py +14155552671 --web-search --open-browser
+
+# Or use the standalone web search tool
+python phone_web_search.py 415-555-2671
+python phone_web_search.py +14155552671 -o json
+```
+
+The web search generates Google-dork queries across these categories:
+- **Social Media** — Facebook, Twitter/X, LinkedIn, Instagram, Reddit, TikTok, Pinterest, Nextdoor
+- **Business Directories** — Yelp, BBB, Yellow Pages, Manta
+- **People / Public Records** — WhitePages, TruePeopleSearch, Spokeo, 411
+- **Paste Sites** — Pastebin, JustPaste.it (for data leak detection)
+- **Classifieds** — Craigslist, OfferUp, Facebook Marketplace
+- **Court / Government** — Public court records, government databases
 
 ## Example Output
 
