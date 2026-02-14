@@ -1,6 +1,6 @@
-# Phone Number Public Information Lookup
+# OSINT Public Information Lookup Toolkit
 
-A Python CLI tool that retrieves **publicly available** information tied to any phone number. No illegal data access — only open-source libraries and free public APIs.
+A collection of Python CLI tools that retrieve **publicly available** information tied to phone numbers and IP addresses. No illegal data access — only open-source libraries, free public APIs, and public search engine queries.
 
 ## What It Finds
 
@@ -113,11 +113,62 @@ The web search generates Google-dork queries across these categories:
 ============================================================
 ```
 
+## IP Address Web Search
+
+Generate OSINT search queries to find an IP address across threat intelligence platforms, abuse databases, WHOIS registries, and more.
+
+### Usage
+
+```bash
+# Basic search
+python ip_web_search.py 8.8.8.8
+
+# JSON output
+python ip_web_search.py 24.189.157.220 -o json
+
+# Open top results in your browser
+python ip_web_search.py 192.168.1.1 --open-browser
+```
+
+The IP search generates Google-dork queries across these categories:
+- **Threat Intelligence** — AbuseIPDB, VirusTotal, Shodan, GreyNoise, Talos, Censys, AlienVault OTX
+- **WHOIS / Registry** — ARIN, RIPE, APNIC, LACNIC, AFRINIC, Whois.com
+- **Blacklists / Reputation** — MXToolbox, Spamhaus, Barracuda, Project Honeypot
+- **Paste / Data Leak Sites** — Pastebin, Pastie, JustPaste.it
+- **Forums / Abuse Reports** — Reddit, StackOverflow, ServerFault, general abuse/spam reports
+
+### Example Output
+
+```
+======================================================================
+  IP ADDRESS — WEB SEARCH QUERY GENERATOR
+======================================================================
+
+  Target IP:  8.8.8.8
+  Total queries generated: 25
+
+--- General (4 queries) ------------------------------------------------
+    1. "8.8.8.8"
+       https://www.google.com/search?q=%228.8.8.8%22
+    2. "8.8.8.8" intitle:"forum" OR intitle:"abuse" OR intitle:"blacklist"
+       ...
+
+--- Threat Intelligence (8 queries) ------------------------------------
+    1. "8.8.8.8" site:abuseipdb.com
+       ...
+
+======================================================================
+  All queries target PUBLIC search engine results only.
+  No private databases or restricted sources are accessed.
+======================================================================
+```
+
 ## Legal Disclaimer
 
-This tool accesses **only publicly available information**. It uses:
+These tools access **only publicly available information**. They use:
 
 1. **Google's libphonenumber** — an open-source phone number parsing library
 2. **Free public APIs** (optional) — that provide carrier/location metadata available to anyone
+3. **Public search engine queries** — Google dork queries targeting publicly indexed pages
 
-No private databases, protected records, or restricted data sources are queried. This tool is intended for legitimate purposes such as verifying your own numbers, fraud prevention, or general OSINT research.
+No private databases, protected records, or restricted data sources are queried. These tools are intended for legitimate purposes such as verifying your own numbers/IPs, fraud prevention, or general OSINT research.
