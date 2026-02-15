@@ -238,6 +238,78 @@ def reverse_dns(ip: str) -> str | None:
         return None
 
 
+def forward_dns(hostname: str) -> dict:
+    """Resolve a hostname to its A and AAAA records."""
+    results = {"A": [], "AAAA": []}
+    try:
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET, socket.SOCK_STREAM):
+            addr = info[4][0]
+            if addr not in results["A"]:
+                results["A"].append(addr)
+    except (socket.gaierror, OSError):
+        pass
+    try:
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET6, socket.SOCK_STREAM):
+            addr = info[4][0]
+            if addr not in results["AAAA"]:
+                results["AAAA"].append(addr)
+    except (socket.gaierror, OSError):
+        pass
+    return results
+
+
+def dns_lookup(ip: str) -> dict:
+    """
+    Perform DNS lookups for an IP address:
+    - Reverse DNS (PTR record)
+    - Forward DNS on the resulting hostname (A/AAAA)
+    - Additional DNS queries via public DNS-over-HTTPS (Cloudflare)
+    """
+    result = {"ptr": None, "hostname": None, "forward_a": [], "forward_aaaa": [],
+              "mx": [], "ns": [], "txt": [], "soa": None}
+
+    # Reverse DNS → hostname
+    hostname = reverse_dns(ip)
+    if hostname:
+        result["ptr"] = hostname
+        result["hostname"] = hostname
+
+        # Forward DNS on the discovered hostname
+        fwd = forward_dns(hostname)
+        result["forward_a"] = fwd.get("A", [])
+        result["forward_aaaa"] = fwd.get("AAAA", [])
+
+        # Query MX, NS, TXT, SOA for the domain via Cloudflare DoH
+        # Extract the base domain (last two labels)
+        parts = hostname.rstrip(".").split(".")
+        domain = ".".join(parts[-2:]) if len(parts) >= 2 else hostname
+
+        for rtype in ["MX", "NS", "TXT", "SOA"]:
+            url = f"https://cloudflare-dns.com/dns-query?name={domain}&type={rtype}"
+            try:
+                req = urllib.request.Request(url, headers={
+                    "Accept": "application/dns-json",
+                    "User-Agent": _USER_AGENT,
+                })
+                if _opener:
+                    resp = _opener.open(req, timeout=5)
+                else:
+                    resp = urllib.request.urlopen(req, timeout=5)
+                with resp:
+                    data = json.loads(resp.read().decode())
+                answers = data.get("Answer", [])
+                for ans in answers:
+                    rdata = ans.get("data", "").strip('"')
+                    if rtype == "SOA" and result["soa"] is None:
+                        result["soa"] = rdata
+                    elif rtype != "SOA":
+                        result[rtype.lower()].append(rdata)
+            except Exception:
+                pass
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Optional: API-key-based lookups
 # ---------------------------------------------------------------------------
@@ -307,10 +379,11 @@ def run_live_lookup(ip: str, shodan_key: str = None,
     """Run all available lookups for a single IP and merge results."""
     result = {"ip": ip, "lookups": []}
 
-    # Reverse DNS
-    rdns = reverse_dns(ip)
-    if rdns:
-        result["reverse_dns"] = rdns
+    # DNS lookups (reverse DNS, forward DNS, MX, NS, TXT, SOA)
+    dns_info = dns_lookup(ip)
+    result["dns"] = dns_info
+    if dns_info.get("ptr"):
+        result["reverse_dns"] = dns_info["ptr"]
 
     # Free APIs (try all, keep whatever succeeds)
     for fn in [lookup_ip_api, lookup_ipwhois, lookup_ipapi_co]:
@@ -378,13 +451,26 @@ SITE_CATEGORIES = {
         "serverfault.com",
         "security.stackexchange.com",
     ],
+    "DNS / Hostname": [
+        "dnsdumpster.com",
+        "viewdns.info",
+        "securitytrails.com",
+        "dnslytics.com",
+        "robtex.com",
+        "dnschecker.org",
+        "completedns.com",
+    ],
 }
 
 
-def generate_search_queries(ip_formats: list[str]) -> list[dict]:
+def generate_search_queries(ip_formats: list[str],
+                            hostname: str = None) -> list[dict]:
     """
     Builds a list of categorized Google-dork search queries.
     Returns list of dicts: {category, query, url}
+
+    If a hostname was discovered via reverse DNS, additional
+    hostname-based queries are generated.
     """
     queries = []
     seen = set()
@@ -408,6 +494,25 @@ def generate_search_queries(ip_formats: list[str]) -> list[dict]:
             for site in sites:
                 add(category, f'{quoted} site:{site}')
 
+    # Hostname-based queries if reverse DNS found a name
+    if hostname:
+        hq = f'"{hostname}"'
+        add("DNS / Hostname", hq)
+        add("DNS / Hostname", f'{hq} intitle:"dns" OR intitle:"whois"')
+        add("DNS / Hostname", f'{hq} intitle:"subdomain" OR intitle:"certificate"')
+        add("DNS / Hostname", f'{hq} filetype:zone OR filetype:conf')
+        add("DNS / Hostname", f'site:crt.sh "{hostname}"')
+
+        # Extract base domain and add domain-level queries
+        parts = hostname.rstrip(".").split(".")
+        if len(parts) >= 2:
+            domain = ".".join(parts[-2:])
+            if domain != hostname:
+                dq = f'"{domain}"'
+                add("DNS / Hostname", f'{dq} site:dnsdumpster.com')
+                add("DNS / Hostname", f'{dq} site:securitytrails.com')
+                add("DNS / Hostname", f'{dq} site:crt.sh')
+
     return queries
 
 
@@ -425,8 +530,34 @@ def print_lookup_text(lookup_result: dict):
     print(f"  LIVE LOOKUP — {ip}")
     print("=" * SECTION_WIDTH)
 
+    # DNS section
+    dns = lookup_result.get("dns", {})
     rdns = lookup_result.get("reverse_dns")
-    if rdns:
+    has_dns = rdns or dns.get("forward_a") or dns.get("forward_aaaa") or dns.get("mx") or dns.get("ns")
+
+    if has_dns:
+        print(f"\n--- DNS & Hostname {'-' * (SECTION_WIDTH - 19)}")
+        if rdns:
+            print(f"  {'PTR (Reverse DNS)':<26} {rdns}")
+        hostname = dns.get("hostname")
+        if hostname and hostname != rdns:
+            print(f"  {'Hostname':<26} {hostname}")
+        if dns.get("forward_a"):
+            print(f"  {'Forward A':<26} {', '.join(dns['forward_a'])}")
+        if dns.get("forward_aaaa"):
+            print(f"  {'Forward AAAA':<26} {', '.join(dns['forward_aaaa'])}")
+        if dns.get("mx"):
+            for mx in dns["mx"]:
+                print(f"  {'MX':<26} {mx}")
+        if dns.get("ns"):
+            for ns in dns["ns"]:
+                print(f"  {'NS':<26} {ns}")
+        if dns.get("txt"):
+            for txt in dns["txt"]:
+                print(f"  {'TXT':<26} {txt}")
+        if dns.get("soa"):
+            print(f"  {'SOA':<26} {dns['soa']}")
+    elif rdns:
         print(f"\n  Reverse DNS:  {rdns}")
 
     lookups = lookup_result.get("lookups", [])
@@ -508,9 +639,10 @@ def run_web_search(ip_str: str, open_browser: bool = False,
     and optionally display results.
     """
     formats = format_ip_address(ip_str)
-    queries = generate_search_queries(formats)
     lookup_result = run_live_lookup(ip_str, shodan_key=shodan_key,
                                    abuseipdb_key=abuseipdb_key)
+    hostname = lookup_result.get("dns", {}).get("hostname")
+    queries = generate_search_queries(formats, hostname=hostname)
 
     if output_format == "json":
         print_all_json(ip_str, formats, queries, lookup_result)
