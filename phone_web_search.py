@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-IP Address Lookup & Web Search Query Generator
+IP Address & Phone Number Lookup / Web Search Query Generator
 
 Performs live lookups against free public APIs (ip-api.com, ipwhois.app,
 ipapi.co) and generates structured OSINT search queries for deeper
 investigation across threat intelligence, geolocation, and network tools.
+
+Also supports phone number identification: carrier/VoIP detection,
+format variant generation, and OSINT queries across caller-ID and
+telecom lookup sites.
 
 Supports HTTP/HTTPS/SOCKS4/SOCKS5 proxy tunneling for environments with
 restricted outbound access.
@@ -14,6 +18,8 @@ Usage:
   python phone_web_search.py 24.189.157.220 67.83.243.7
   python phone_web_search.py 8.8.8.8 --open-browser
   python phone_web_search.py 2001:db8::1 -o json
+  python phone_web_search.py --phone +15551234567
+  python phone_web_search.py --phone 555-123-4567 --phone-country US
   python phone_web_search.py 24.189.157.220 --shodan-key YOUR_KEY
   python phone_web_search.py 24.189.157.220 --proxy socks5://127.0.0.1:9050
   python phone_web_search.py 24.189.157.220 --proxy http://user:pass@proxy:8080
@@ -311,6 +317,398 @@ def dns_lookup(ip: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Phone number parsing & lookup
+# ---------------------------------------------------------------------------
+# Known VoIP provider patterns (carrier name substrings)
+VOIP_CARRIERS = [
+    "google voice", "bandwidth", "twilio", "vonage", "ringcentral",
+    "textnow", "textfree", "pinger", "talkatone", "magicjack",
+    "ooma", "grasshopper", "openphone", "dialpad", "nextiva",
+    "8x8", "zoom phone", "microsoft teams", "skype", "whatsapp",
+    "telegram", "signal", "line ", "viber", "telnyx", "plivo",
+    "sinch", "messagenet", "flowroute", "voxbone", "inteliquent",
+    "level 3", "lumen", "bandwidth.com",
+]
+
+
+def normalize_phone(raw: str, country: str = "US") -> dict:
+    """
+    Parse a raw phone string into a normalized structure.
+    Returns dict with: raw, e164, national, digits_only, country_code, etc.
+    """
+    digits = re.sub(r'\D', '', raw)
+    result = {
+        "raw": raw,
+        "digits_only": digits,
+        "country": country.upper(),
+        "country_code": None,
+        "national": None,
+        "e164": None,
+        "is_valid": False,
+    }
+
+    # Country code mapping (expandable)
+    cc_map = {
+        "US": "1", "CA": "1", "UK": "44", "GB": "44", "AU": "61",
+        "DE": "49", "FR": "33", "IN": "91", "JP": "81", "BR": "55",
+        "MX": "52", "IT": "39", "ES": "34", "NL": "31", "SE": "46",
+        "NO": "47", "FI": "358", "DK": "45", "PL": "48", "RU": "7",
+        "CN": "86", "KR": "82", "SG": "65", "NZ": "64", "IE": "353",
+        "ZA": "27", "IL": "972", "AE": "971", "SA": "966",
+    }
+    cc = cc_map.get(country.upper(), "1")
+    result["country_code"] = cc
+
+    # If starts with + or 00, extract country code
+    if raw.strip().startswith("+"):
+        # Already has country code
+        if digits.startswith(cc):
+            national = digits[len(cc):]
+        else:
+            national = digits
+        result["e164"] = f"+{digits}"
+        result["national"] = national
+        result["is_valid"] = len(national) >= 7
+    elif len(digits) == 10 and country.upper() in ("US", "CA"):
+        # Standard 10-digit North American
+        result["national"] = digits
+        result["e164"] = f"+1{digits}"
+        result["is_valid"] = True
+    elif len(digits) == 11 and digits.startswith("1") and country.upper() in ("US", "CA"):
+        # 11-digit with leading 1
+        result["national"] = digits[1:]
+        result["e164"] = f"+{digits}"
+        result["is_valid"] = True
+    elif len(digits) >= 7:
+        # Assume national number
+        result["national"] = digits
+        result["e164"] = f"+{cc}{digits}"
+        result["is_valid"] = True
+
+    return result
+
+
+def format_phone_variants(phone: dict) -> list[str]:
+    """
+    Generate multiple format variants of a phone number for searching.
+    """
+    variants = set()
+    national = phone.get("national", "")
+    e164 = phone.get("e164", "")
+    digits = phone.get("digits_only", "")
+    cc = phone.get("country_code", "1")
+
+    if not national or len(national) < 7:
+        if digits:
+            variants.add(digits)
+        return sorted(variants)
+
+    # E.164 format: +15551234567
+    if e164:
+        variants.add(e164)
+
+    # Plain digits
+    variants.add(digits)
+    if national != digits:
+        variants.add(national)
+
+    # US/CA specific formats
+    if cc == "1" and len(national) == 10:
+        area = national[:3]
+        prefix = national[3:6]
+        line = national[6:]
+        # (555) 123-4567
+        variants.add(f"({area}) {prefix}-{line}")
+        # 555-123-4567
+        variants.add(f"{area}-{prefix}-{line}")
+        # 555.123.4567
+        variants.add(f"{area}.{prefix}.{line}")
+        # 555 123 4567
+        variants.add(f"{area} {prefix} {line}")
+        # 1-555-123-4567
+        variants.add(f"1-{area}-{prefix}-{line}")
+        # +1 (555) 123-4567
+        variants.add(f"+1 ({area}) {prefix}-{line}")
+        # +1-555-123-4567
+        variants.add(f"+1-{area}-{prefix}-{line}")
+    else:
+        # International: try with/without country code, spaced
+        if len(national) >= 7:
+            # Spaced in groups of 3-4
+            spaced = " ".join(
+                national[i:i+3] for i in range(0, len(national), 3)
+            )
+            variants.add(spaced)
+            if cc:
+                variants.add(f"+{cc} {spaced}")
+                variants.add(f"+{cc}-{'-'.join(national[i:i+3] for i in range(0, len(national), 3))}")
+
+    return sorted(variants)
+
+
+def lookup_phone_numverify(phone: dict) -> dict | None:
+    """Query numverify.com (free tier, 100 req/month, no key needed for basic)."""
+    e164 = phone.get("e164", "")
+    if not e164:
+        return None
+    # numverify requires the number without + prefix
+    number = e164.lstrip("+")
+    url = f"http://apilayer.net/api/validate?access_key=&number={number}"
+    # Free tier without key — will return limited data
+    data = _http_get_json(url)
+    if data and data.get("valid"):
+        return {
+            "source": "numverify.com",
+            "number": data.get("international_format", e164),
+            "country": data.get("country_name", ""),
+            "location": data.get("location", ""),
+            "carrier": data.get("carrier", ""),
+            "line_type": data.get("line_type", ""),
+        }
+    return None
+
+
+def lookup_phone_veriphone(phone: dict) -> dict | None:
+    """Query veriphone.io (free, no key, 1000 req/day)."""
+    e164 = phone.get("e164", "")
+    if not e164:
+        return None
+    url = f"https://api.veriphone.io/v2/verify?phone={urllib.parse.quote(e164)}"
+    data = _http_get_json(url)
+    if data and data.get("phone_valid"):
+        carrier = data.get("carrier", "")
+        carrier_lower = carrier.lower() if carrier else ""
+        is_voip = any(v in carrier_lower for v in VOIP_CARRIERS)
+        return {
+            "source": "veriphone.io",
+            "number": data.get("e164", e164),
+            "international": data.get("international_number", ""),
+            "national": data.get("national_number", ""),
+            "country": data.get("country", ""),
+            "country_code": data.get("country_prefix", ""),
+            "carrier": carrier,
+            "type": data.get("phone_type", ""),
+            "voip_suspected": is_voip,
+        }
+    return None
+
+
+def detect_voip_from_carrier(carrier: str) -> bool:
+    """Check if a carrier name matches known VoIP providers."""
+    if not carrier:
+        return False
+    carrier_lower = carrier.lower()
+    return any(v in carrier_lower for v in VOIP_CARRIERS)
+
+
+def run_phone_lookup(phone: dict) -> dict:
+    """Run all available phone lookups and merge results."""
+    result = {
+        "input": phone["raw"],
+        "e164": phone.get("e164"),
+        "national": phone.get("national"),
+        "country": phone.get("country"),
+        "is_valid": phone.get("is_valid", False),
+        "lookups": [],
+        "voip_detected": False,
+        "carrier": None,
+    }
+
+    for fn in [lookup_phone_veriphone, lookup_phone_numverify]:
+        data = fn(phone)
+        if data:
+            result["lookups"].append(data)
+            # Extract carrier and VoIP info
+            if data.get("carrier") and not result["carrier"]:
+                result["carrier"] = data["carrier"]
+            if data.get("voip_suspected"):
+                result["voip_detected"] = True
+            line_type = data.get("line_type", "") or data.get("type", "")
+            if line_type and "voip" in line_type.lower():
+                result["voip_detected"] = True
+
+    # If we found a carrier, do VoIP check
+    if result["carrier"] and not result["voip_detected"]:
+        result["voip_detected"] = detect_voip_from_carrier(result["carrier"])
+
+    return result
+
+
+PHONE_SITE_CATEGORIES = {
+    "Caller ID / Reverse Lookup": [
+        "truecaller.com",
+        "whitepages.com",
+        "spokeo.com",
+        "usphonebook.com",
+        "fastpeoplesearch.com",
+        "thatphonenumber.com",
+        "calleridtest.com",
+    ],
+    "Telecom / Carrier Lookup": [
+        "freecarrierlookup.com",
+        "carrierinfo.com",
+        "fonefinder.net",
+        "telcodata.us",
+        "numberingplans.com",
+    ],
+    "Spam / Scam Reports": [
+        "800notes.com",
+        "whocallsme.com",
+        "shouldianswer.com",
+        "nomorobo.com",
+        "robokiller.com",
+        "hiya.com",
+    ],
+    "Social / Messaging": [
+        "sync.me",
+        "getcontact.com",
+        "eyecon.com",
+        "callapp.com",
+    ],
+}
+
+
+def generate_phone_search_queries(phone_formats: list[str]) -> list[dict]:
+    """
+    Build categorized Google-dork search queries for a phone number.
+    Returns list of dicts: {category, query, url}
+    """
+    queries = []
+    seen = set()
+
+    def add(category: str, query: str):
+        if query not in seen:
+            seen.add(query)
+            url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
+            queries.append({"category": category, "query": query, "url": url})
+
+    for fmt in phone_formats:
+        quoted = f'"{fmt}"'
+
+        add("General", quoted)
+        add("General", f'{quoted} intitle:"caller" OR intitle:"owner"')
+        add("General", f'{quoted} intitle:"spam" OR intitle:"scam"')
+        add("General", f'{quoted} filetype:csv OR filetype:xls')
+
+        for category, sites in PHONE_SITE_CATEGORIES.items():
+            for site in sites:
+                add(category, f'{quoted} site:{site}')
+
+    return queries
+
+
+def print_phone_lookup_text(phone_result: dict):
+    """Pretty-print phone lookup results."""
+    print()
+    print("=" * SECTION_WIDTH)
+    print(f"  PHONE LOOKUP — {phone_result['input']}")
+    print("=" * SECTION_WIDTH)
+
+    if phone_result.get("e164"):
+        print(f"\n  {'E.164':<26} {phone_result['e164']}")
+    if phone_result.get("national"):
+        print(f"  {'National':<26} {phone_result['national']}")
+    if phone_result.get("country"):
+        print(f"  {'Country':<26} {phone_result['country']}")
+    if phone_result.get("carrier"):
+        print(f"  {'Carrier':<26} {phone_result['carrier']}")
+
+    voip = phone_result.get("voip_detected", False)
+    print(f"  {'VoIP Detected':<26} {'YES' if voip else 'No'}")
+
+    lookups = phone_result.get("lookups", [])
+    if not lookups:
+        print("\n  No phone API responded successfully.")
+        print("  Try running on a machine with internet access.")
+    else:
+        for info in lookups:
+            source = info.pop("source", "Unknown")
+            print(f"\n--- {source} {'-' * (SECTION_WIDTH - len(source) - 5)}")
+            for key, value in info.items():
+                if value is None or value == "" or value == []:
+                    continue
+                label = key.replace("_", " ").title()
+                if isinstance(value, bool):
+                    value = "Yes" if value else "No"
+                print(f"  {label:<26} {value}")
+
+    print()
+
+
+def print_phone_queries_text(raw_input: str, formats: list[str],
+                             queries: list[dict]):
+    """Pretty-print phone search queries grouped by category."""
+    print()
+    print("=" * SECTION_WIDTH)
+    print("  PHONE NUMBER — WEB SEARCH QUERY GENERATOR")
+    print("=" * SECTION_WIDTH)
+
+    print(f"\n  Input Phone:  {raw_input}")
+    print(f"  Format variants searched ({len(formats)}):")
+    for f in formats:
+        print(f"    - {f}")
+
+    by_cat: dict[str, list[dict]] = {}
+    for q in queries:
+        by_cat.setdefault(q["category"], []).append(q)
+
+    print(f"\n  Total queries generated: {len(queries)}")
+
+    for cat, items in by_cat.items():
+        print(f"\n--- {cat} ({len(items)} queries) {'-' * (SECTION_WIDTH - len(cat) - 16)}")
+        for i, item in enumerate(items, 1):
+            print(f"  {i:>3}. {item['query']}")
+            print(f"       {item['url']}")
+
+    print()
+    print("=" * SECTION_WIDTH)
+    print("  All queries target PUBLIC search engine results only.")
+    print("  No private databases or restricted sources are accessed.")
+    print("=" * SECTION_WIDTH)
+    print()
+
+
+def print_phone_all_json(raw_input: str, phone: dict, formats: list[str],
+                         queries: list[dict], lookup_result: dict):
+    """Output phone results as JSON."""
+    output = {
+        "type": "phone",
+        "input": raw_input,
+        "parsed": phone,
+        "formats": formats,
+        "live_lookup": lookup_result,
+        "total_queries": len(queries),
+        "queries": queries,
+    }
+    print(json.dumps(output, indent=2))
+
+
+def run_phone_search(raw_phone: str, country: str = "US",
+                     open_browser: bool = False,
+                     output_format: str = "text") -> list[dict]:
+    """
+    Main entry point for phone number lookup and query generation.
+    """
+    phone = normalize_phone(raw_phone, country=country)
+    formats = format_phone_variants(phone)
+    lookup_result = run_phone_lookup(phone)
+    queries = generate_phone_search_queries(formats)
+
+    if output_format == "json":
+        print_phone_all_json(raw_phone, phone, formats, queries, lookup_result)
+    else:
+        print_phone_lookup_text(lookup_result)
+        print_phone_queries_text(raw_phone, formats, queries)
+
+    if open_browser:
+        general = [q for q in queries if q["category"] == "General"][:3]
+        for q in general:
+            webbrowser.open(q["url"])
+
+    return queries
+
+
+# ---------------------------------------------------------------------------
 # Optional: API-key-based lookups
 # ---------------------------------------------------------------------------
 def lookup_shodan(ip: str, api_key: str) -> dict | None:
@@ -322,8 +720,13 @@ def lookup_shodan(ip: str, api_key: str) -> dict | None:
         vulns = data.get("vulns", [])
         hostnames = data.get("hostnames", [])
         # Check for VoIP-related ports
-        voip_ports = {5060, 5061, 4569, 2000, 1720}
-        voip_detected = [p for p in ports if p in voip_ports]
+        voip_ports = {
+            5060: "SIP", 5061: "SIP-TLS", 4569: "IAX2",
+            2000: "SCCP/Skinny", 1720: "H.323",
+            3478: "STUN/TURN", 5004: "RTP", 5005: "RTP",
+            2427: "MGCP",
+        }
+        voip_detected = {p: voip_ports[p] for p in ports if p in voip_ports}
         return {
             "source": "shodan.io",
             "ip": data.get("ip_str", ip),
@@ -337,6 +740,7 @@ def lookup_shodan(ip: str, api_key: str) -> dict | None:
             "city": data.get("city", ""),
             "asn": data.get("asn", ""),
             "voip_ports": voip_detected,
+            "voip_protocols": list(voip_detected.values()) if voip_detected else [],
             "voip_detected": len(voip_detected) > 0,
         }
     return None
@@ -663,7 +1067,7 @@ def run_web_search(ip_str: str, open_browser: bool = False,
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Look up IP addresses and generate OSINT web search queries.",
+        description="Look up IP addresses and phone numbers, generate OSINT web search queries.",
         epilog=(
             "Examples:\n"
             "  python phone_web_search.py 24.189.157.220\n"
@@ -671,13 +1075,27 @@ def build_parser() -> argparse.ArgumentParser:
             "  python phone_web_search.py 8.8.8.8 --open-browser\n"
             "  python phone_web_search.py 8.8.8.8 --shodan-key YOUR_KEY\n"
             "  python phone_web_search.py 2001:db8::1 -o json\n"
+            "  python phone_web_search.py --phone +15551234567\n"
+            "  python phone_web_search.py --phone 555-123-4567 --phone-country US\n"
+            "  python phone_web_search.py 24.189.157.220 --phone +15551234567\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "ips",
-        nargs="+",
+        nargs="*",
         help="One or more IP addresses to search for (IPv4 or IPv6)",
+    )
+    parser.add_argument(
+        "--phone",
+        action="append",
+        default=None,
+        help="Phone number(s) to look up (can be used multiple times)",
+    )
+    parser.add_argument(
+        "--phone-country",
+        default="US",
+        help="Default country for phone numbers without country code (default: US)",
     )
     parser.add_argument(
         "-o", "--output",
@@ -718,14 +1136,24 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    if not args.ips and not args.phone:
+        parser.error("at least one IP address or --phone number is required")
+
     # Set up proxy tunnel if provided
     configure_proxy(args.proxy)
 
-    for ip in args.ips:
+    # Process IP addresses
+    for ip in (args.ips or []):
         run_web_search(ip, open_browser=args.open_browser,
                        output_format=args.output,
                        shodan_key=args.shodan_key,
                        abuseipdb_key=args.abuseipdb_key)
+
+    # Process phone numbers
+    for phone in (args.phone or []):
+        run_phone_search(phone, country=args.phone_country,
+                         open_browser=args.open_browser,
+                         output_format=args.output)
 
 
 if __name__ == "__main__":
