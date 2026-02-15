@@ -6,16 +6,22 @@ Performs live lookups against free public APIs (ip-api.com, ipwhois.app,
 ipapi.co) and generates structured OSINT search queries for deeper
 investigation across threat intelligence, geolocation, and network tools.
 
+Supports HTTP/HTTPS/SOCKS4/SOCKS5 proxy tunneling for environments with
+restricted outbound access.
+
 Usage:
   python phone_web_search.py 24.189.157.220
   python phone_web_search.py 24.189.157.220 67.83.243.7
   python phone_web_search.py 8.8.8.8 --open-browser
   python phone_web_search.py 2001:db8::1 -o json
   python phone_web_search.py 24.189.157.220 --shodan-key YOUR_KEY
+  python phone_web_search.py 24.189.157.220 --proxy socks5://127.0.0.1:9050
+  python phone_web_search.py 24.189.157.220 --proxy http://user:pass@proxy:8080
 """
 
 import argparse
 import json
+import os
 import re
 import socket
 import sys
@@ -61,16 +67,90 @@ def format_ip_address(ip_address: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Live API lookups (free, no key required)
+# Proxy / tunnel support
 # ---------------------------------------------------------------------------
 _USER_AGENT = "IPLookupTool/1.0"
+_proxy_handler: urllib.request.ProxyHandler | None = None
+_opener: urllib.request.OpenerDirector | None = None
+
+
+def configure_proxy(proxy_url: str | None):
+    """
+    Set up a global proxy for all HTTP/HTTPS requests.
+
+    Supported formats:
+      - http://host:port
+      - http://user:pass@host:port
+      - https://host:port
+      - socks5://host:port   (requires PySocks: pip install pysocks)
+      - socks4://host:port
+      - socks5h://host:port  (DNS resolved through proxy)
+
+    Also respects the environment variables HTTP_PROXY / HTTPS_PROXY
+    if --proxy is not provided.
+    """
+    global _proxy_handler, _opener
+
+    if not proxy_url:
+        # Check environment variables
+        env_proxy = (
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("http_proxy")
+        )
+        if env_proxy:
+            proxy_url = env_proxy
+        else:
+            _opener = None
+            return
+
+    scheme = proxy_url.split("://")[0].lower() if "://" in proxy_url else ""
+
+    if scheme in ("socks4", "socks5", "socks5h"):
+        # SOCKS proxy — requires PySocks
+        try:
+            import socks
+            from sockshandler import SocksiPyHandler
+        except ImportError:
+            print("  [!] SOCKS proxy requires PySocks: pip install pysocks")
+            print("      Falling back to direct connection.")
+            _opener = None
+            return
+
+        parsed = urllib.parse.urlparse(proxy_url)
+        socks_type = {
+            "socks4": socks.SOCKS4,
+            "socks5": socks.SOCKS5,
+            "socks5h": socks.SOCKS5,
+        }[scheme]
+        rdns = scheme == "socks5h"
+        _opener = urllib.request.build_opener(
+            SocksiPyHandler(socks_type, parsed.hostname, parsed.port or 1080,
+                            rdns=rdns, username=parsed.username,
+                            password=parsed.password)
+        )
+        print(f"  [*] Using SOCKS proxy: {parsed.hostname}:{parsed.port}")
+    else:
+        # HTTP/HTTPS proxy
+        _proxy_handler = urllib.request.ProxyHandler({
+            "http": proxy_url,
+            "https": proxy_url,
+        })
+        _opener = urllib.request.build_opener(_proxy_handler)
+        parsed = urllib.parse.urlparse(proxy_url)
+        print(f"  [*] Using HTTP proxy: {parsed.hostname}:{parsed.port}")
 
 
 def _http_get_json(url: str, timeout: int = 10) -> dict | None:
     """Helper to GET a URL and parse JSON, returning None on failure."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if _opener:
+            resp = _opener.open(req, timeout=timeout)
+        else:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+        with resp:
             return json.loads(resp.read().decode())
     except Exception:
         return None
@@ -488,12 +568,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="AbuseIPDB API key for abuse/reputation data",
     )
+    parser.add_argument(
+        "--proxy",
+        default=None,
+        help=(
+            "Proxy URL for tunneling API requests. Supports: "
+            "http://host:port, https://host:port, "
+            "socks5://host:port, socks4://host:port, "
+            "socks5h://host:port (DNS via proxy). "
+            "Also reads HTTP_PROXY/HTTPS_PROXY env vars."
+        ),
+    )
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    # Set up proxy tunnel if provided
+    configure_proxy(args.proxy)
+
     for ip in args.ips:
         run_web_search(ip, open_browser=args.open_browser,
                        output_format=args.output,
