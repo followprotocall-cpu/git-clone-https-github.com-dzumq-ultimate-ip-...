@@ -113,6 +113,82 @@ The web search generates Google-dork queries across these categories:
 ============================================================
 ```
 
+## TikTok Log Analyzer
+
+A companion script for analyzing TikTok app telemetry logs in the format publicly
+disclosed by security researcher [fs0c131y](https://gist.github.com/fs0c131y/b4ef278e8863c636964793e1b27f889d).
+Useful for understanding what data the TikTok app collects during a session.
+
+### What It Extracts
+
+| Category | Details |
+|---|---|
+| **Device Info** | Model, brand, OS version, CPU ABI, screen resolution, language, region |
+| **App Info** | App version, package name, channel (e.g. googleplay), build info |
+| **Unique Identifiers** | `openudid`, `clientudid`, `google_aid` (advertising ID), `device_id`, `install_id`, `sig_hash` |
+| **Network Hosts** | All hostnames/IPs the app contacts or probes during the session |
+| **Active Network Probes** | External hosts pinged via `network_observe_report` (including Facebook, Google, etc.) |
+| **Event Telemetry** | All events logged: `feed_request`, `launch_log`, `stay_time`, `splash_ad`, and more |
+
+### Usage
+
+```bash
+# Analyze a local log file
+python tiktok_log_analyzer.py logs.txt
+
+# Fetch and analyze the original public gist directly
+python tiktok_log_analyzer.py --gist
+
+# JSON output for programmatic use
+python tiktok_log_analyzer.py --gist -o json
+
+# Show every individual event in chronological order
+python tiktok_log_analyzer.py logs.txt --show-events
+python tiktok_log_analyzer.py --gist --show-events
+```
+
+### Example Output (text mode)
+
+```
+======================================================================
+  TIKTOK LOG ANALYZER — Security Research Tool
+  Based on public disclosure by fs0c131y
+======================================================================
+
+--- Device & App Info -------------------------------------------------
+  device_model:                  Nexus 6P
+  os:                            Android
+  os_version:                    8.1.0
+  app_version:                   17.2.4
+  package:                       com.zhiliaoapp.musically
+  region:                        US
+
+--- Unique Identifiers Collected --------------------------------------
+  openudid:                      e4340d3235274e4b
+  google_aid:                    315f154c-a3a0-48de-b932-319e0595114b
+  device_id:                     6727990782160700929
+
+--- Network Hosts Observed (N) ----------------------------------------
+  api19-core-c-useast1a.tiktokv.com
+  tp-pay-mva.byteoversea.com
+  ...
+
+--- Active Network Probes (network_observe_report) --------------------
+  graph.facebook.com:443  -> 179.60.192.3
+  8.8.8.8:443             -> 8.8.8.8
+  ...
+
+--- Top Event Tags ----------------------------------------------------
+      4  feed_request
+      3  network_observe_report
+      2  splash_ad
+  ...
+```
+
+No additional dependencies required beyond the standard library.
+
+---
+
 ## Legal Disclaimer
 
 This tool accesses **only publicly available information**. It uses:
