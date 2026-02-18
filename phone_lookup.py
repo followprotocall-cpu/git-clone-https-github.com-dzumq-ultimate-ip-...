@@ -22,7 +22,7 @@ import json
 import sys
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     import phonenumbers
@@ -116,7 +116,7 @@ def lookup_numverify(phone_e164: str, api_key: str) -> dict:
     # NumVerify expects number without leading '+'
     number = phone_e164.lstrip("+")
     url = (
-        f"http://apilayer.net/api/validate"
+        f"https://apilayer.net/api/validate"
         f"?access_key={api_key}&number={number}&format=1"
     )
     try:
@@ -245,7 +245,7 @@ def print_results(data: dict, output_format: str = "text"):
     print_section("Disclaimer")
     print("  All information shown is from PUBLIC sources only.")
     print("  No private or protected data was accessed.")
-    print(f"  Lookup performed at: {datetime.utcnow().isoformat()}Z")
+    print(f"  Lookup performed at: {datetime.now(timezone.utc).isoformat()}")
     print()
     print("=" * SECTION_WIDTH)
     print()

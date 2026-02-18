@@ -64,7 +64,7 @@ def format_phone_number(phone_number: str) -> list[str]:
         # International — just add common separators
         formats.add(phone_number.strip())
         if phone_number.startswith("+"):
-            formats.add(phone_number.strip())
+            formats.add(phone_number.lstrip("+"))
 
     return sorted(formats)
 
