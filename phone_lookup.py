@@ -22,7 +22,7 @@ import json
 import sys
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timezone as dt_timezone
 
 try:
     import phonenumbers
@@ -245,7 +245,7 @@ def print_results(data: dict, output_format: str = "text"):
     print_section("Disclaimer")
     print("  All information shown is from PUBLIC sources only.")
     print("  No private or protected data was accessed.")
-    print(f"  Lookup performed at: {datetime.now(timezone.utc).isoformat()}")
+    print(f"  Lookup performed at: {datetime.now(dt_timezone.utc).isoformat()}")
     print()
     print("=" * SECTION_WIDTH)
     print()
