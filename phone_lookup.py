@@ -111,7 +111,15 @@ def lookup_offline(phone_str: str) -> dict:
 # Optional: NumVerify free API enrichment (public data only)
 # Sign up at https://numverify.com for a free API key (250 req/month)
 # ---------------------------------------------------------------------------
-def lookup_numverify(phone_e164: str, api_key: str) -> dict:
+def _make_opener(proxy: str = ""):
+    """Return a urllib opener, optionally routed through a proxy tunnel."""
+    if proxy:
+        handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        return urllib.request.build_opener(handler)
+    return urllib.request.build_opener()
+
+
+def lookup_numverify(phone_e164: str, api_key: str, proxy: str = "") -> dict:
     """Query NumVerify API for additional public carrier/location metadata."""
     # NumVerify expects number without leading '+'
     number = phone_e164.lstrip("+")
@@ -121,7 +129,8 @@ def lookup_numverify(phone_e164: str, api_key: str) -> dict:
     )
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "PhoneLookupTool/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        opener = _make_opener(proxy)
+        with opener.open(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         if data.get("valid") is not None:
             return {
@@ -141,7 +150,7 @@ def lookup_numverify(phone_e164: str, api_key: str) -> dict:
 # Optional: Abstract API free tier
 # Sign up at https://www.abstractapi.com/api/phone-validation-api
 # ---------------------------------------------------------------------------
-def lookup_abstractapi(phone_e164: str, api_key: str) -> dict:
+def lookup_abstractapi(phone_e164: str, api_key: str, proxy: str = "") -> dict:
     """Query Abstract API for additional public phone metadata."""
     url = (
         f"https://phonevalidation.abstractapi.com/v1/"
@@ -149,7 +158,8 @@ def lookup_abstractapi(phone_e164: str, api_key: str) -> dict:
     )
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "PhoneLookupTool/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        opener = _make_opener(proxy)
+        with opener.open(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         return {
             "abstract_valid": data.get("valid"),
@@ -295,6 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abstract API key for extra phone metadata (free tier available)",
     )
     parser.add_argument(
+        "--proxy",
+        default="",
+        metavar="URL",
+        help="Proxy tunnel URL for API requests (e.g. http://127.0.0.1:8080)",
+    )
+    parser.add_argument(
         "--web-search",
         action="store_true",
         help="Also generate OSINT web search queries (social media, directories, etc.)",
@@ -320,11 +336,13 @@ def do_lookup(phone_str: str, args) -> dict:
     if "error" not in data:
         e164 = data["e164_format"]
 
+        proxy = getattr(args, "proxy", "")
+
         if args.numverify_key:
-            data.update(lookup_numverify(e164, args.numverify_key))
+            data.update(lookup_numverify(e164, args.numverify_key, proxy=proxy))
 
         if args.abstract_key:
-            data.update(lookup_abstractapi(e164, args.abstract_key))
+            data.update(lookup_abstractapi(e164, args.abstract_key, proxy=proxy))
 
         if getattr(args, "web_search", False):
             try:
