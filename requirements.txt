@@ -1,2 +1,9 @@
 phonenumbers>=8.13.0
 requests>=2.28.0
+
+# File metadata extraction (optional but recommended for full support)
+Pillow>=10.0.0          # Image EXIF data (GPS, camera, dates, author)
+pypdf>=3.0.0            # PDF metadata (author, creator, dates)
+python-docx>=1.0.0      # Word document metadata (author, company, dates)
+openpyxl>=3.1.0         # Excel spreadsheet metadata
+filetype>=1.2.0         # Accurate file type detection from magic bytes

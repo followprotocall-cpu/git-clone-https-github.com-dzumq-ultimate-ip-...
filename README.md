@@ -121,3 +121,111 @@ This tool accesses **only publicly available information**. It uses:
 2. **Free public APIs** (optional) — that provide carrier/location metadata available to anyone
 
 No private databases, protected records, or restricted data sources are queried. This tool is intended for legitimate purposes such as verifying your own numbers, fraud prevention, or general OSINT research.
+
+---
+
+# File Metadata Extraction
+
+A companion tool that analyzes **uploaded or downloaded files** to reveal hidden metadata — who created a file, where a photo was taken, what software was used, and more.
+
+## What It Reveals
+
+| Category | Details |
+|---|---|
+| **File Identity** | True file type from content (not just extension), extension mismatch detection |
+| **File System Info** | Size, permissions, created/modified/accessed timestamps |
+| **Cryptographic Hashes** | MD5, SHA-1, SHA-256 — identify tampered or duplicate files |
+| **GPS Location** | Latitude, longitude, altitude embedded in photos — links to Google Maps |
+| **Camera / Device** | Camera make, model, lens, serial number embedded in EXIF |
+| **Image Details** | Date/time photo was taken, software used to edit, artist name, copyright |
+| **PDF Metadata** | Author, creator application, creation/modification dates, keywords |
+| **Word Metadata** | Author, last editor, company, revision number, creation date |
+| **Excel Metadata** | Creator, last editor, company, sheet names |
+
+### Critical Finding Flags
+
+The tool automatically highlights:
+- `GPS_LOCATION_EMBEDDED` — the photo contains physical coordinates of where it was taken
+- `AUTHOR_IDENTIFIED` — a person's name is embedded in the document
+- `COMPANY_IDENTIFIED` — an organization name is embedded in the document
+- `MODIFIED_BY_DIFFERENT_USER` — the last editor is different from the original author
+- `EXTENSION_MISMATCH` — the file is disguised as a different type
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Analyze a local file
+```bash
+python file_metadata.py photo.jpg
+python file_metadata.py document.pdf
+python file_metadata.py report.docx spreadsheet.xlsx
+```
+
+### Analyze all files in a folder
+```bash
+python file_metadata.py /path/to/folder/
+python file_metadata.py /path/to/folder/ --recursive
+```
+
+### Download and analyze from a URL
+```bash
+python file_metadata.py --url "https://example.com/photo.jpg"
+```
+
+### Download and analyze from Google Drive (public files)
+```bash
+python file_metadata.py --url "https://drive.google.com/file/d/FILE_ID/view?usp=sharing"
+```
+> The file must be shared publicly ("Anyone with the link can view").
+
+### JSON output (for scripting or saving results)
+```bash
+python file_metadata.py photo.jpg -o json
+python file_metadata.py photo.jpg -o json > results.json
+```
+
+## Example Output
+
+```
+======================================================================
+  FILE: suspicious_photo.jpg
+======================================================================
+
+--- File Identity -------------------------------------------------------
+  Filename:                      suspicious_photo.jpg
+  Extension:                     .jpg
+  Detected Type:                 JPEG Image
+  MIME Type:                     image/jpeg
+
+--- File System Info ----------------------------------------------------
+  Size:                          3.2 MB
+  Last Modified:                 2026-01-15 09:23:11 UTC
+
+--- Cryptographic Hashes (for verification) -----------------------------
+  MD5:                           a3f1...
+  SHA-256:                       9c2b...
+
+--- Image Info ----------------------------------------------------------
+  Format:                        JPEG
+  Dimensions:                    4032 x 3024 px
+
+  [GPS LOCATION FOUND]
+  Latitude:                      37.774929
+  Longitude:                     -122.419416
+  Google Maps:                   https://maps.google.com/?q=37.774929,-122.419416
+
+  [EXIF Data]
+  Date Taken:                    2026-01-15 09:23:11
+  Camera Make:                   Apple
+  Camera Model:                  iPhone 15 Pro
+  Software:                      17.2.1
+
+  *** FINDINGS ***
+  [!] CRITICAL: This file contains GPS coordinates — physical location where it was created.
+  [!] IMPORTANT: The software used to create this file is recorded in the metadata.
+```
